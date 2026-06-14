@@ -1,0 +1,1235 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>コトダマ・バトル — 声で殴るAIアーケード</title>
+<style>
+  :root{
+    --bg:#0b0c1a; --panel:#141633; --ink:#e8eaff; --dim:#8b8fc7;
+    --hot:#ff3a6e; --gold:#ffd23f; --cyan:#37e0ff; --green:#5fff8f;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:"Courier New",monospace;-webkit-font-smoothing:none;overflow:hidden}
+  #wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:10px}
+  h1{font-size:18px;letter-spacing:2px;margin:0;color:var(--gold);text-shadow:2px 2px 0 #000}
+  #arena{display:flex;gap:10px;justify-content:center;align-items:stretch;
+    width:100%;max-width:1100px;height:min(47.5vw,512px)}
+  #stage{position:relative;height:100%;aspect-ratio:8/5;flex:0 0 auto;
+    border:4px solid #2a2d5e;border-radius:6px;background:#05060f;
+    box-shadow:0 0 0 4px #000, 0 10px 40px rgba(0,0,0,.6);overflow:hidden}
+  /* ことだまタイムライン（右ペイン＝固定高さ。増えてもペイン内だけスクロール） */
+  #kotodama{width:210px;flex:0 0 210px;height:100%;background:var(--panel);border:3px solid #2a2d5e;
+    border-radius:6px;padding:8px;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+  .ktitle{font-size:13px;color:var(--gold);text-align:center;margin-bottom:6px;letter-spacing:1px}
+  #kotoList{display:flex;flex-direction:column;gap:6px;overflow-y:auto;min-height:0;flex:1}
+  .kfoot{font-size:11px;color:var(--gold);text-align:center;margin-top:6px;min-height:14px;
+    border-top:1px solid #2a2d5e;padding-top:5px}
+  .khint{font-size:10px;color:var(--dim);text-align:center;margin-top:6px;line-height:1.5}
+  .kcard{border:2px solid #2a2d5e;border-radius:5px;padding:5px;background:rgba(0,0,0,.35);word-break:break-all}
+  .kstat{font-size:11px;font-weight:bold;border-radius:3px;padding:2px 7px;display:inline-block}
+  .kword{font-size:13px;color:#fff;margin-top:5px;line-height:1.4}
+  .kres{display:flex;justify-content:space-between;align-items:center;margin-top:5px;gap:6px;
+    border-top:1px dashed #2a2d5e;padding-top:4px}
+  .kelem{font-size:12px}
+  .kdmg{font-size:20px;font-weight:bold;color:var(--gold);white-space:nowrap;text-shadow:1px 1px 0 #000}
+  .kcard.queued{border-color:#5566aa;opacity:.85}
+  .kcard.queued .kstat{background:#3a4170;color:#cfd6e6}
+  .kcard.listening{border-color:var(--cyan)}
+  .kcard.listening .kstat{background:var(--cyan);color:#001018}
+  .kcard.judging{border-color:var(--gold);background:rgba(255,210,63,.14);animation:kpulse 1s infinite}
+  .kcard.judging .kstat{background:var(--gold);color:#000;font-size:12px}
+  .kcard.done{opacity:.9}
+  .kcard.done .kstat{background:#27331f;color:var(--green)}
+  @keyframes kpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,210,63,.4)}50%{box-shadow:0 0 9px 2px rgba(255,210,63,.7)}}
+  canvas{position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated}
+  #startOverlay{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:12px;cursor:pointer;text-align:center;
+    background:rgba(5,6,15,.82);color:var(--gold);font-size:30px;font-weight:bold;text-shadow:2px 2px 0 #000}
+  #startOverlay .sub{font-size:14px;color:var(--ink);font-weight:normal}
+  #startOverlay.hidden{display:none}
+  /* HUD overlay */
+  .hud{position:absolute;left:0;right:0;pointer-events:none;padding:8px 12px}
+  #topbar{top:0;display:flex;justify-content:space-between;align-items:flex-start;font-size:13px}
+  #botbar{bottom:0;display:flex;flex-direction:column;gap:6px}
+  .tag{background:rgba(20,22,51,.85);border:2px solid #2a2d5e;border-radius:4px;padding:3px 8px}
+  #score{color:var(--gold)} #wave{color:var(--cyan)}
+  /* power meter */
+  #power{height:22px;border:2px solid #2a2d5e;border-radius:4px;background:rgba(0,0,0,.5);position:relative;overflow:hidden}
+  #powerFill{height:100%;width:0%;background:linear-gradient(90deg,var(--green),var(--gold),var(--hot));transition:width .05s linear}
+  #powerLabel{position:absolute;left:6px;top:2px;font-size:12px;color:#000;font-weight:bold;mix-blend-mode:difference;color:#fff}
+  /* player HP */
+  #hp{height:22px;border:2px solid #2a2d5e;border-radius:4px;background:rgba(0,0,0,.5);position:relative;overflow:hidden}
+  #hpFill{height:100%;width:100%;background:linear-gradient(90deg,#ff3a6e,#ffd23f);transition:width .25s ease-out}
+  #hpLabel{position:absolute;left:6px;top:2px;font-size:12px;font-weight:bold;color:#fff;text-shadow:1px 1px 0 #000}
+  /* 気合メーター(カメラの動き量) */
+  #ki{height:18px;border:2px solid #2a2d5e;border-radius:4px;background:rgba(0,0,0,.5);position:relative;overflow:hidden}
+  #kiFill{height:100%;width:0%;background:linear-gradient(90deg,#ff8a3a,#ff3a6e);transition:width .08s linear}
+  #kiLabel{position:absolute;left:6px;top:1px;font-size:11px;font-weight:bold;color:#fff;text-shadow:1px 1px 0 #000}
+  #vid{display:none}
+  /* casting line */
+  #castLine{min-height:20px;font-size:15px;color:var(--cyan);text-shadow:1px 1px 0 #000;text-align:center}
+  #castLine.final{color:var(--gold)}
+  /* result banner */
+  #banner{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%) scale(.6);
+    text-align:center;opacity:0;transition:transform .18s ease-out,opacity .18s;pointer-events:none}
+  #banner.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+  #banner .name{font-size:34px;font-weight:bold;color:var(--gold);text-shadow:3px 3px 0 #000,0 0 16px var(--hot)}
+  #banner .sub{font-size:18px;color:var(--ink)}
+  /* controls */
+  #controls{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  button{font-family:inherit;font-size:14px;padding:8px 14px;border:3px solid #000;border-radius:4px;
+    background:var(--gold);color:#000;font-weight:bold;cursor:pointer;box-shadow:2px 2px 0 #000}
+  button:active{transform:translate(2px,2px);box-shadow:none}
+  button.off{background:#2a2d5e;color:var(--dim)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .ok{color:var(--green)} .warn{color:var(--gold)} .err{color:var(--hot)}
+  #help{font-size:12px;color:var(--dim);max-width:960px;text-align:center;line-height:1.6}
+  kbd{background:#2a2d5e;border:1px solid #444;border-radius:3px;padding:1px 5px;color:var(--ink)}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>⚔ コトダマ・バトル ⚔</h1>
+  <div id="arena">
+    <div id="stage">
+      <canvas id="cv"></canvas>
+      <div id="topbar" class="hud">
+        <span class="tag" id="timer">⏱ 120</span>
+        <span class="tag" id="wave">WAVE 1</span>
+        <span class="tag" id="score">SCORE 0</span>
+        <span class="tag" id="hi">HI 0</span>
+      </div>
+      <div id="banner"><div class="name"></div><div class="sub"></div></div>
+      <div id="botbar" class="hud">
+        <div id="castLine">マイクをONにして敵に呪文を叫べ！</div>
+        <div id="hp"><div id="hpFill"></div><div id="hpLabel">YOU 100%</div></div>
+        <div id="power"><div id="powerFill"></div><div id="powerLabel">VOICE</div></div>
+        <div id="ki"><div id="kiFill"></div><div id="kiLabel">気合 (うごき)</div></div>
+      </div>
+      <video id="vid" playsinline muted></video>
+      <div id="startOverlay">▶ タップして スタート<div class="sub">マイク・カメラ・BGM・読み上げ を ぜんぶON</div></div>
+    </div>
+    <aside id="kotodama">
+      <div class="ktitle">ことだま詠唱</div>
+      <div id="kotoList"></div>
+      <div id="status" class="kfoot">接続中…</div>
+      <div id="ttsStat" class="kfoot"></div>
+      <div class="khint">声→STT→AI判定の<br>「いま」が見える</div>
+    </aside>
+  </div>
+  <div id="controls">
+    <button type="button" id="mic" class="off">🎤 マイクOFF</button>
+    <button type="button" id="cam" class="off">📷 カメラOFF</button>
+    <button type="button" id="bgm" class="off">🎵 BGM OFF</button>
+    <button type="button" id="tts" class="off">🔊 読み上げOFF</button>
+    <button type="button" id="reset">↻ リセット</button>
+  </div>
+  <div id="help">
+    敵の<b>名前や位置</b>と<b>弱点属性</b>を声で叫ぶ（例：水の敵には「<kbd>みぎの みずだまを かみなりで！</kbd>」）。
+    頭上の<b>弱点→◯</b>がヒント。<b>大声＝威力UP</b>、カメラONで<b>動く＝気合UP</b>、カッコいい詠唱で会心。<br>
+    敵の<b>「！こうげき」予兆</b>が出たら回避：<b>その敵にフォーカスを合わせて体を動かす</b>／「<kbd>ガード！</kbd>」と叫ぶ（全方位）／その敵を<b>倒す</b>。
+  </div>
+</div>
+
+<script type="module">
+import { judgeSpell, enemyAttacks, cannedAttack, JUDGE_ENDPOINT, ENEMY_ENDPOINT } from './spell-judge.js';
+
+// ============================================================
+// 設定・DOM
+// ============================================================
+const TARGET_RATE = 16000, SEND_CHUNK = 2048;
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const $ = (id) => document.getElementById(id);
+const powerFill = $('powerFill'), castLine = $('castLine'), powerLabel = $('powerLabel');
+const hpFill = $('hpFill'), hpLabel = $('hpLabel'), kotoList = $('kotoList');
+const banner = $('banner'), bannerName = banner.querySelector('.name'), bannerSub = banner.querySelector('.sub');
+const statusEl = $('status'), micBtn = $('mic'), ttsBtn = $('tts');
+const camBtn = $('cam'), kiFill = $('kiFill'), vid = $('vid'), bgmBtn = $('bgm');
+const timerEl = $('timer'), hiEl = $('hi'), resetBtn = $('reset');
+
+// 論理解像度（描画はこの座標系。CSSで拡大）
+const W = 960, H = 600;
+function fitCanvas(){
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.imageSmoothingEnabled = false;
+}
+fitCanvas(); addEventListener('resize', fitCanvas);
+
+const STAT_COLOR = { ok:'#5fff8f', warn:'#ffd23f', err:'#ff3a6e', recording:'#37e0ff' };
+const setStatus = (t, c='') => { statusEl.textContent = t; statusEl.style.color = STAT_COLOR[c] || 'var(--dim)'; };
+
+// ============================================================
+// 属性と相性
+// ============================================================
+// 常識で分かる弱点だけ(ゲーム知識不要)。火←水(消火) 氷←火(溶かす) 水←雷(感電) 土←水(流す)。
+// 敵は火/水/氷/土の4種。頭上に「弱点→◯」を出すので、それを叫ぶだけでOK。
+const WEAKNESS = { 火:'水', 氷:'火', 水:'雷', 土:'水' };
+const ELEM_COLOR = { 火:'#ff5a3a', 水:'#3aa0ff', 雷:'#ffe23a', 風:'#7affc0', 土:'#c79a5a',
+  闇:'#a96bff', 氷:'#9be8ff', 毒:'#b6ff3a', 鋼:'#cfd6e6', ヒタイ:'#ffd23f' };
+// 属性ごとの見た目（言った属性が画面に出る）
+const ELEM_FX = {
+  火:  {colors:['#ff5a3a','#ffb13a','#ffe23a'], count:30, spread:130, up:-90, grav:-50, size:5, shape:'dot'},
+  水:  {colors:['#3aa0ff','#9be8ff','#ffffff'], count:26, spread:170, up:-130, grav:340, size:5, shape:'dot'},
+  雷:  {colors:['#ffe23a','#ffffff','#9be8ff'], count:16, spread:230, up:0,    grav:0,   size:3, shape:'dot', bolt:true},
+  風:  {colors:['#7affc0','#dfffff','#ffffff'], count:24, spread:300, up:0,    grav:0,   size:3, shape:'streak', gust:true},
+  土:  {colors:['#c79a5a','#8a6a3a','#5a4a2a'], count:22, spread:120, up:-150, grav:460, size:6, shape:'rock'},
+  闇:  {colors:['#a96bff','#6b3aff','#d0a0ff'], count:28, spread:170, up:0,    grav:0,   size:5, shape:'dot', implode:true},
+  氷:  {colors:['#9be8ff','#dffaff','#ffffff'], count:18, spread:180, up:-50,  grav:160, size:7, shape:'shard'},
+  毒:  {colors:['#b6ff3a','#7aff7a','#3aff9a'], count:24, spread:120, up:-110, grav:-40, size:6, shape:'dot'},
+  鋼:  {colors:['#cfd6e6','#ffffff','#9aa6c6'], count:22, spread:240, up:0,    grav:100, size:3, shape:'spark'},
+  ヒタイ:{colors:['#ffd23f','#ffffff','#ff8aa0'],count:24, spread:210, up:0,   grav:0,   size:5, shape:'star'},
+};
+function matchup(atk, def){
+  if (WEAKNESS[def] === atk) return 1.8;  // 弱点を突いた＝効果バツグン
+  if (atk === def) return 0.7;            // 同属性は通りにくい
+  return 1.0;
+}
+
+// ============================================================
+// 敵
+// ============================================================
+// 敵は火/水/氷/土の4種だけ。弱点が常識で分かるものに限定。
+const ENEMY_KINDS = [
+  { emoji:'🔥', name:'ひのたま', aliases:['火の玉','火','炎'], element:'火' },
+  { emoji:'🐉', name:'ドラゴン', aliases:['竜','りゅう'],     element:'火' },
+  { emoji:'💧', name:'みずだま', aliases:['水','水玉'],       element:'水' },
+  { emoji:'🐟', name:'さかな',   aliases:['魚','フィッシュ'], element:'水' },
+  { emoji:'❄️', name:'こおり',   aliases:['氷','コオリ'],     element:'氷' },
+  { emoji:'⛄', name:'ゆきだるま', aliases:['雪だるま','雪'], element:'氷' },
+  { emoji:'🪨', name:'いわ',     aliases:['岩','石'],         element:'土' },
+  { emoji:'🗿', name:'モアイ',   aliases:['もあい','像'],     element:'土' },
+];
+// ミニボス用（高HP・大きめ、属性は4種から）
+const BOSS_KINDS = [
+  { emoji:'👹', name:'おに',         aliases:['鬼','オニ'],       element:'火' },
+  { emoji:'🦖', name:'きょうりゅう', aliases:['恐竜','りゅう'],   element:'土' },
+  { emoji:'🐲', name:'うみへび',     aliases:['海蛇','へび'],     element:'水' },
+];
+const COLS = [{x:W*0.22,tag:'left',ja:'ひだり'},{x:W*0.5,tag:'mid',ja:'まんなか'},{x:W*0.78,tag:'right',ja:'みぎ'}];
+const ROWS = [{y:H*0.30,tag:'top',ja:'うえ'},{y:H*0.52,tag:'bottom',ja:'した'}];
+
+let enemies = [], effects = [], wave = 0, score = 0, idSeq = 0;
+let shake = 0, flash = 0, hurt = 0, tint = 0, casting = false, peakLoud = 0, resolving = false;
+let tintColor = '#fff';   // 属性色の画面フラッシュ
+// プレイヤー
+let playerHP = 1000, playerMax = 1000, down = false, nextAttackIn = 0, combo = 0;
+// セッション（120秒・開始カウントダウン・得点記録）
+const GAME_SEC = 120, HI_KEY = 'spellbattle_hi', TOP_KEY = 'spellbattle_top';
+let timeLeft = GAME_SEC, countdown = 0, gameOver = false, sessionActive = false;
+let hiScore = +(localStorage.getItem(HI_KEY) || 0);
+let topList = [], myRank = -1;
+function loadTop(){ try { return JSON.parse(localStorage.getItem(TOP_KEY)) || []; } catch { return []; } }
+function beginSession(){
+  score = 0; combo = 0; wave = 0; enemies = []; effects = [];
+  judgeQueue.length = 0; kotodama.length = 0; liveText = '';
+  playerHP = playerMax; down = false; gameOver = false; sessionActive = true;
+  timeLeft = GAME_SEC; countdown = 5.0;            // 5-4-3-2-1-スタート
+  $('score').textContent = 'SCORE 0'; hiEl.textContent = 'HI ' + hiScore;
+  timerEl.textContent = '⏱ ' + GAME_SEC;
+  updateHP(); kotoRender(); banner.classList.remove('show');
+}
+function endGame(){
+  gameOver = true; attacksEnabled = false;
+  for (const e of enemies){ e.charging = false; e.pendingAtk = null; }
+  if (score > hiScore){ hiScore = score; localStorage.setItem(HI_KEY, hiScore); }
+  hiEl.textContent = 'HI ' + hiScore;
+  // Top10 ランキング更新
+  const list = loadTop();
+  myRank = -1;
+  if (score > 0){
+    const name = (prompt('なまえを いれてね（TOP10）', 'ぼうけんしゃ') || 'ぼうけんしゃ').slice(0, 8);
+    const entry = { name, score };
+    list.push(entry);
+    list.sort((a, b) => b.score - a.score);
+    while (list.length > 10) list.pop();
+    localStorage.setItem(TOP_KEY, JSON.stringify(list));
+    myRank = list.indexOf(entry);
+  }
+  topList = list;
+  setStatus('ゲーム終了！「↻ リセット」でもう一度', 'ok');
+}
+resetBtn.addEventListener('click', beginSession);
+let attacksEnabled = false, attackInterval = 6;
+// 戦闘：敵の攻撃は予兆(チャージ)→着弾。その間に倒す/ガード/パンチで回避できる。
+const WINDUP_MS = 3000, GUARD_MS = 1800;
+let guardUntil = 0, lastPunch = 0;
+// カメラ(AR背景) + 動き量(気合)
+let cameraOn = false, motionLevel = 0, peakMotion = 0, camStream = null;
+const motCv = document.createElement('canvas'); motCv.width = 64; motCv.height = 48;
+const motCtx = motCv.getContext('2d', { willReadFrequently: true });
+let motPrev = null, motAcc = 0;
+// 動きの重心 → 照準(focus)。最寄りの敵にフォーカスし、曖昧な叫びを寄せる。
+let focusX = W/2, focusY = H/2, focusActive = false, focusId = null;
+
+async function startCamera(){
+  camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 }, audio: false });
+  vid.srcObject = camStream; await vid.play();
+  cameraOn = true; motPrev = null;
+}
+function stopCamera(){
+  cameraOn = false;
+  if (camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream = null; }
+  vid.srcObject = null; motionLevel = 0; kiFill.style.width = '0%';
+  focusActive = false; focusId = null;
+}
+// フレーム差分で体の動き量を 0..1 で推定（ML不要）
+function sampleMotion(){
+  if (!cameraOn || vid.readyState < 2){ motionLevel *= 0.9; return; }
+  const prevLevel = motionLevel;
+  motCtx.drawImage(vid, 0, 0, 64, 48);
+  const cur = motCtx.getImageData(0, 0, 64, 48).data;
+  if (motPrev){
+    let changed = 0;
+    for (let i=0;i<cur.length;i+=4){
+      const d = Math.abs(cur[i]-motPrev[i]) + Math.abs(cur[i+1]-motPrev[i+1]) + Math.abs(cur[i+2]-motPrev[i+2]);
+      if (d > 60) changed++;
+    }
+    const raw = Math.min(1, (changed / (64*48)) * 3.5);
+    motionLevel = motionLevel*0.6 + raw*0.4;          // 平滑化（気合・パンチ用）
+  }
+  motPrev = cur;
+  // 顔/頭の位置 = 肌色の重心（上側を重めにして顔へ寄せる）。動きより顔に行く。
+  let skin = 0, fxs = 0, fys = 0;
+  for (let i=0;i<cur.length;i+=4){
+    const r=cur[i], g=cur[i+1], b=cur[i+2];
+    if (r>95 && g>40 && b>20 && r>g && r>b && (r-Math.min(g,b))>15){
+      const p=i>>2, x=p%64, y=(p/64)|0, w=1.4-(y/48)*0.7;
+      skin+=w; fxs+=x*w; fys+=y*w;
+    }
+  }
+  if (skin > 8){
+    const fx = W - (fxs/skin/64)*W, fy = (fys/skin/48)*H;
+    focusX = focusX*0.75 + fx*0.25; focusY = focusY*0.75 + fy*0.25;  // 平滑
+    focusActive = true;
+  }
+  kiFill.style.width = (motionLevel*100).toFixed(0)+'%';
+  if (casting) peakMotion = Math.max(peakMotion, motionLevel);
+  if (casting && motionLevel > 0.45 && performance.now()-lastKick > 140){
+    shake = Math.max(shake, 6 + motionLevel*10); lastKick = performance.now();
+  }
+  tryPunch(prevLevel);   // 動きスパイク=パンチ
+}
+function nearestToFocus(){
+  let best=null, bd=1e9;
+  for (const e of enemies){ if(e.dead) continue; const d=(e.x-focusX)**2+(e.y-focusY)**2; if(d<bd){ bd=d; best=e; } }
+  return best;
+}
+// 動き量が急に跳ねたら「パンチ」: ロックオン中の敵に物理ヒット（声と別の即時攻撃）
+function tryPunch(prevLevel){
+  const t = performance.now();
+  if (motionLevel > 0.66 && prevLevel < 0.5 && t-lastPunch > 450 && started && !down){
+    lastPunch = t; punchHit();
+  }
+}
+function punchHit(){
+  const target = enemies.find(e=>e.id===focusId && !e.dead) || nearestToFocus();
+  if (!target) return;
+  const dmg = 500 + Math.round(motionLevel*1100);
+  target.hp -= dmg;
+  const dir = target.x<W/2 ? -1 : 1;
+  target.vx += dir*360; target.vy -= 130; target.hitUntil = performance.now()+220;
+  elementBurst(target.x, target.y, 'ヒタイ', 1.2, dir);
+  addPopup(target.x, target.y-24, '💥'+dmg, '#ffffff', true);
+  shake = Math.max(shake, 18); flash = Math.max(flash, .28);
+  if (target.hp<=0){
+    target.dead=true; target.deadAnim=.5; target.hp=0; target.charging=false; target.pendingAtk=null;
+    combo++; score += 80 + combo*20; $('score').textContent = 'SCORE '+score;
+    addPopup(target.x, target.y-60, combo>=2?`GET! x${combo}`:'GET!', '#5fff8f', true);
+  }
+}
+function drawCameraBg(){
+  if (!cameraOn || vid.readyState < 2) return false;
+  const vw = vid.videoWidth, vh = vid.videoHeight;
+  if (!vw) return false;
+  const scale = Math.max(W/vw, H/vh), dw = vw*scale, dh = vh*scale;
+  ctx.save();
+  ctx.translate(W, 0); ctx.scale(-1, 1);            // 鏡像（自撮り感）
+  ctx.globalAlpha = 0.42;                           // 宇宙(下)に星が透ける
+  ctx.drawImage(vid, (W-dw)/2, (H-dh)/2, dw, dh);
+  ctx.restore();
+  ctx.fillStyle = 'rgba(2,3,10,.42)'; ctx.fillRect(0,0,W,H);  // 全体を暗めに(敵を見やすく)
+  return true;
+}
+camBtn.addEventListener('click', async ()=>{
+  if (cameraOn){ stopCamera(); camBtn.classList.add('off'); camBtn.textContent='📷 カメラOFF'; return; }
+  camBtn.disabled = true;
+  try{ await startCamera(); camBtn.classList.remove('off'); camBtn.textContent='📷 カメラON'; setStatus('カメラON：体を動かすと気合UP','ok'); }
+  catch(e){ setStatus('カメラ取得失敗: '+(e.message||e),'err'); }
+  finally{ camBtn.disabled = false; }
+});
+function updateHP(){
+  const pct = Math.max(0, playerHP / playerMax);
+  hpFill.style.width = (pct*100).toFixed(0)+'%';
+  hpLabel.textContent = down ? 'ダウン…' : `YOU ${Math.round(pct*100)}%`;
+}
+
+function posLabel(rTag, cJa, rJa){
+  if (rTag === 'mid') return cJa; // 真ん中行は列だけ
+  return cJa === 'まんなか' ? rJa : cJa + rJa;
+}
+
+function shuffle(a){ for(let i=a.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
+function makeEnemy(k, c, r, hp, scale=1){
+  return {
+    id:'e'+(++idSeq), emoji:k.emoji, name:k.name, aliases:k.aliases, element:k.element,
+    hp, maxHp:hp, x:c.x, y:r.y, vx:0, vy:0, baseX:c.x, baseY:r.y,
+    posLabel: posLabel(r.tag, c.ja, r.ja), posTags:[c.tag,r.tag],
+    bob: rng()*Math.PI*2, dead:false, hitUntil:0, scale,
+  };
+}
+function spawnWave(n, hpBase, {boss=false}={}){
+  enemies = [];
+  const slots = shuffle([...ROWS.flatMap(r=>COLS.map(c=>({c,r})))]);
+  const kinds = shuffle(ENEMY_KINDS.slice());   // 種類を重複しにくく
+  if (boss){
+    const bk = BOSS_KINDS[Math.floor(rng()*BOSS_KINDS.length)];
+    enemies.push(makeEnemy(bk, {x:W*0.5,tag:'mid',ja:'まんなか'}, {y:H*0.34,tag:'top',ja:'うえ'}, Math.round(hpBase*3.2), 1.8));
+    for (let i=0, p=0; p<Math.min(n,4) && i<slots.length; i++){
+      const {c,r}=slots[i];
+      if (c.tag==='mid' && r.tag==='top') continue;  // ボスと被らせない
+      enemies.push(makeEnemy(kinds[p%kinds.length], c, r, Math.round(hpBase*(0.55+rng()*0.4))));
+      p++;
+    }
+    return;
+  }
+  for (let i=0;i<Math.min(n,slots.length);i++){
+    const {c,r} = slots[i];
+    enemies.push(makeEnemy(kinds[i%kinds.length], c, r, Math.round(hpBase*(0.7+rng()*0.6))));
+  }
+}
+
+// 決定的乱数（同じ展開が欲しい場面用。基本は Math.random で十分だが種を持つ）
+let seed = 12345;
+function rng(){ seed = (seed*1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+
+// ============================================================
+// ウェーブ進行（手続き的に確実に進化。LLM演出は任意で上乗せ）
+// ============================================================
+// 緊張と緩和: 練習→通常→(4の倍数)休息→(5の倍数)ボス
+function waveType(w){
+  if (w === 1) return 'practice';
+  if (w % 5 === 0) return 'boss';
+  if (w % 4 === 0) return 'breather';
+  return 'normal';
+}
+function nextWave(){
+  wave++;
+  const type = waveType(wave);
+  $('wave').textContent = `WAVE ${wave}` + (type==='boss'?' ★BOSS' : type==='breather'?' ☕' : '');
+  // gpt-oss は power 大きめ(〜8000)を返しがち。一撃必殺になりすぎないHP帯に。
+  let n, hp, boss=false, title, msg;
+  if (type==='practice'){ n=2; hp=1400; title='れんしゅう'; msg='てきの なまえか ぞくせいを さけんでみよう！'; }
+  else if (type==='breather'){ n=2; hp=2200+wave*400; title='ひとやすみ ☕'; msg='ボーナス！ せめは こない'; }
+  else if (type==='boss'){ n=3; hp=2600+wave*1100; boss=true; title='★ミニボス★'; msg='つよい てきが あらわれた！'; }
+  else { n=Math.min(6, 2+Math.floor(wave/2)); hp=2600+wave*1300; title=`WAVE ${wave}`; msg=`${n}たい あらわれた！`; }
+  spawnWave(n, hp, {boss});
+  // 練習・休息は敵が攻撃しない（緩和）。通常/ボスは攻撃ON、波が進むほど間隔短く（緊張）
+  attacksEnabled = (type==='normal' || type==='boss');
+  attackInterval = Math.max(3.0, 7.5 - wave*0.3);
+  nextAttackIn = attacksEnabled ? 6 : 1e9;
+  bgmSetMode(type==='boss' ? 'boss' : 'normal');   // ボスはBGMを激しく
+  // 敵の攻撃セリフ: まず定型で即埋め → 裏でLLM生成して上書き(待ち時間ゼロ)
+  for (const e of enemies) e.attack = cannedAttack(e);
+  enemyAttacks(enemies)
+    .then((map) => { for (const e of enemies) if (map[e.id]) e.attack = map[e.id]; })
+    .catch(() => {});
+  showBanner(title, msg);
+}
+
+// ============================================================
+// エフェクト
+// ============================================================
+function addPopup(x,y,text,color,big){
+  effects.push({type:'popup',x,y,text,color,life:1,big});
+}
+function addRing(x,y,color){
+  effects.push({type:'ring',x,y,r:8,color,life:1});
+}
+const rand = (a,b)=>a+Math.random()*(b-a);
+const pickc = (arr)=>arr[Math.floor(Math.random()*arr.length)];
+// 属性ごとの画面フラッシュ強さ
+const ELEM_FLASH = { 火:.5, 水:.3, 雷:.55, 風:.22, 土:.42, 闇:.42, 氷:.34, 毒:.3, 鋼:.32, ヒタイ:.3 };
+// 属性に応じた派手なエフェクト。dir は吹き飛ばし方向(風など)。
+function elementBurst(x,y,element,power=1,dir=1){
+  const fx = ELEM_FX[element] || ELEM_FX['ヒタイ'];
+  // 属性色フラッシュ＋二重リングで「その属性で殴った」を強く出す
+  tintColor = fx.colors[0];
+  tint = Math.max(tint, (ELEM_FLASH[element]||.3) * (0.7+0.5*power));
+  addRing(x,y,fx.colors[0]); addRing(x,y,fx.colors[1]||fx.colors[0]);
+  if (element==='火'){ addRing(x,y,'#ffb13a'); }                  // 火：爆炎の輪を重ねる
+  if (element==='土'){ shake = Math.max(shake, 24+power*8); }      // 土：地響き
+  const n = Math.round(fx.count*(0.7+0.6*power));
+  for (let i=0;i<n;i++){
+    const ang = Math.random()*Math.PI*2;
+    const sp = rand(fx.spread*0.3, fx.spread)*(0.7+0.6*power);
+    let vx = Math.cos(ang)*sp, vy = Math.sin(ang)*sp + fx.up;
+    if (fx.gust){ vx = dir*rand(fx.spread*0.6, fx.spread*1.4); vy = rand(-50,50); } // 横なぎの突風
+    if (fx.implode){ vx*=-1; vy*=-1; }                                               // 内向き(闇)
+    effects.push({type:'particle', x, y, vx, vy, grav:fx.grav, life:rand(.5,1),
+      color:pickc(fx.colors), size:fx.size*rand(.7,1.4), shape:fx.shape, implode:fx.implode, ox:x, oy:y});
+  }
+  if (fx.bolt){ // 雷：上空から「落雷」。極太＋枝分かれ＋白コア＋強フラッシュ
+    effects.push(makeBolt(x, y));
+    effects.push(makeBolt(x, y));                  // 2本重ねて太く
+    addRing(x, y, '#ffffff'); addRing(x, y, fx.colors[0]);
+    flash = Math.max(flash, .6); shake = Math.max(shake, 20);
+  }
+}
+// 上空(画面上端)から対象へ落ちるギザギザの落雷パスを生成（枝つき）
+function makeBolt(tx, ty){
+  const x1 = tx + rand(-40,40), y1 = -10;
+  const seg = 11, pts = [];
+  for (let i=0;i<=seg;i++){
+    const t = i/seg;
+    const jit = (i===0||i===seg) ? 0 : (Math.random()-0.5)*40;
+    pts.push({ x: x1 + (tx-x1)*t + jit, y: y1 + (ty-y1)*t });
+  }
+  const branches = [];
+  for (let b=0;b<2;b++){
+    const idx = 2 + Math.floor(Math.random()*(seg-3));
+    let bx = pts[idx].x, by = pts[idx].y; const bp = [{x:bx,y:by}];
+    const len = 2 + Math.floor(Math.random()*3);
+    for (let i=0;i<len;i++){ bx += (Math.random()-0.5)*55; by += 18+Math.random()*28; bp.push({x:bx,y:by}); }
+    branches.push(bp);
+  }
+  return { type:'bolt', pts, branches, life:1, color:'#ffe23a' };
+}
+function showBanner(name, sub){
+  bannerName.textContent = name; bannerSub.innerHTML = sub;
+  banner.classList.add('show');
+  clearTimeout(showBanner._t);
+  showBanner._t = setTimeout(()=>banner.classList.remove('show'), 2200);
+}
+
+// ============================================================
+// 描画ループ
+// ============================================================
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.05,(now-last)/1000); last = now;
+  update(dt); draw(now, dt);
+  requestAnimationFrame(loop);
+}
+// 疾走感のある宇宙（ワープ星流）
+const stars = [];
+function resetStar(s){ s.x=Math.random()*2-1; s.y=Math.random()*2-1; s.z=Math.random()*0.7+0.5; return s; }
+for (let i=0;i<170;i++) stars.push(resetStar({}));
+function drawSpace(dt){
+  const cx=W/2, cy=H/2, speed=0.85;
+  for (const s of stars){
+    const z0 = s.z;
+    s.z -= dt*speed;
+    if (s.z < 0.06){ resetStar(s); continue; }
+    const x1=cx+(s.x/z0)*W*0.55, y1=cy+(s.y/z0)*H*0.55;
+    const x2=cx+(s.x/s.z)*W*0.55, y2=cy+(s.y/s.z)*H*0.55;
+    const b = Math.min(1,(1-s.z)*1.3);
+    ctx.strokeStyle = `rgba(${(150+105*b)|0},${(185+55*b)|0},255,${0.25+0.7*b})`;
+    ctx.lineWidth = Math.max(1, b*2.6);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+}
+function update(dt){
+  shake *= Math.pow(0.001, dt);
+  flash *= Math.pow(0.02, dt);
+  hurt  *= Math.pow(0.05, dt);
+  tint  *= Math.pow(0.015, dt);
+  motAcc += dt; if (motAcc >= 0.09){ motAcc = 0; sampleMotion(); }   // 動き量サンプリング
+  for (const e of enemies){
+    e.bob += dt*2;
+    // ノックバック減衰してホームへ戻る
+    e.vx += (e.baseX - e.x)*6*dt - e.vx*4*dt;
+    e.vy += (e.baseY - e.y)*6*dt - e.vy*4*dt;
+    e.x += e.vx*dt; e.y += e.vy*dt;
+  }
+  enemies = enemies.filter(e=>!e.dead || e.deadAnim>0);
+  for (const e of enemies) if (e.dead) e.deadAnim -= dt;
+  for (const fx of effects){
+    if (fx.type==='popup'){ fx.y -= 40*dt; fx.life -= dt*1.1; }
+    else if (fx.type==='ring'){ fx.r += 320*dt; fx.life -= dt*1.6; }
+    else if (fx.type==='particle'){
+      if (fx.implode){ fx.vx += (fx.ox-fx.x)*5*dt; fx.vy += (fx.oy-fx.y)*5*dt; }
+      fx.vy += fx.grav*dt; fx.x += fx.vx*dt; fx.y += fx.vy*dt; fx.life -= dt*1.4;
+    }
+    else if (fx.type==='bolt'){ fx.life -= dt*4; }
+  }
+  effects = effects.filter(f=>f.life>0);
+  // 開始カウントダウン（3-2-1）→ 終わったら1波目を出す
+  if (sessionActive && countdown > 0){
+    countdown -= dt;
+    if (countdown <= 0){ countdown = 0; nextWave(); }
+  }
+  const playing = sessionActive && !gameOver && countdown <= 0;
+  // 残り時間（120秒）
+  if (playing){
+    timeLeft -= dt;
+    timerEl.textContent = '⏱ ' + Math.max(0, Math.ceil(timeLeft));
+    if (timeLeft <= 0){ timeLeft = 0; endGame(); }
+  }
+  // 敵の攻撃タイマー（プレイヤーが生きていて敵が居る間）
+  if (playing && !down && attacksEnabled && enemies.some(e=>!e.dead)){
+    nextAttackIn -= dt;
+    if (nextAttackIn <= 0){ beginAttack(); nextAttackIn = attackInterval*(0.7+Math.random()*0.6); }
+  }
+  // 予兆満了の着弾（倒す/ガード/パンチが間に合わなければヒット）
+  if (playing && !down){
+    const tnow = performance.now();
+    for (const e of enemies){ if (e.charging && !e.dead && tnow >= e.chargeUntil) landAttack(e); }
+  }
+  // 全滅したら次ウェーブ
+  if (playing && enemies.length===0){ nextWave(); }
+}
+
+function draw(now, dt){
+  const sx = (Math.random()-0.5)*shake, sy=(Math.random()-0.5)*shake;
+  ctx.save(); ctx.translate(sx,sy);
+  // 背景：常に疾走する宇宙。カメラONならその上に自分を重ねる。
+  ctx.fillStyle = '#03040c'; ctx.fillRect(-20,-20,W+40,H+40);
+  drawSpace(dt);
+  drawCameraBg();
+  // 敵
+  for (const e of enemies) drawEnemy(e, now);
+  // 照準スコープ（カメラの顔/動き位置）
+  drawScope(now);
+  // エフェクト
+  for (const fx of effects) drawEffect(fx);
+  // ガード中のシールドドーム（画面手前＝プレイヤー側）
+  if (now < guardUntil){
+    const a = 0.35 + 0.25*Math.sin(now*0.02);
+    ctx.strokeStyle = `rgba(55,224,255,${a})`; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(W/2, H+40, 360, Math.PI*1.15, Math.PI*1.85); ctx.stroke();
+    ctx.lineWidth = 2; ctx.strokeStyle = `rgba(255,255,255,${a})`;
+    ctx.beginPath(); ctx.arc(W/2, H+40, 348, Math.PI*1.15, Math.PI*1.85); ctx.stroke();
+  }
+  ctx.restore();
+  // 属性色フラッシュ（その属性で殴った/殴られたのが色で分かる）
+  if (tint>0.01){ ctx.globalAlpha=Math.min(.45,tint); ctx.fillStyle=tintColor; ctx.fillRect(0,0,W,H); ctx.globalAlpha=1; }
+  // 画面フラッシュ
+  if (flash>0.01){ ctx.fillStyle=`rgba(255,255,255,${Math.min(.6,flash)})`; ctx.fillRect(0,0,W,H); }
+  // 被弾の赤フラッシュ
+  if (hurt>0.01){ ctx.fillStyle=`rgba(255,40,70,${Math.min(.5,hurt)})`; ctx.fillRect(0,0,W,H); }
+  // ダウン表示
+  if (down && !gameOver){ ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#ff3a6e'; ctx.font='bold 56px "Courier New"'; ctx.textAlign='center';
+    ctx.fillText('ダウン！', W/2, H/2); }
+  // 開始カウントダウン 3-2-1-スタート！
+  if (sessionActive && countdown > 0){
+    ctx.fillStyle='rgba(0,0,0,.5)'; ctx.fillRect(0,0,W,H);
+    const n = Math.ceil(countdown);
+    ctx.fillStyle='#ffd23f'; ctx.textAlign='center';
+    ctx.font='bold 120px "Courier New"';
+    ctx.fillText(countdown<=0.6?'GO!':n, W/2, H/2+30);
+    ctx.font='bold 20px "Courier New"'; ctx.fillStyle='#e8eaff';
+    ctx.fillText('てきの 弱点を こえで さけべ！', W/2, H*0.72);
+  }
+  // ゲーム終了：Top10 ランキング
+  if (gameOver){
+    ctx.fillStyle='rgba(0,0,0,.8)'; ctx.fillRect(0,0,W,H);
+    ctx.textAlign='center';
+    ctx.fillStyle='#ffd23f'; ctx.font='bold 34px "Courier New"';
+    ctx.fillText('ゲームしゅうりょう！  スコア '+score, W/2, 50);
+    ctx.fillStyle='#ff5ad0'; ctx.font='bold 22px "Courier New"'; ctx.fillText('★ TOP 10 ★', W/2, 86);
+    ctx.font='17px "Courier New"';
+    const x0=W*0.28, x1=W*0.72;
+    let y=116;
+    for (let i=0;i<10;i++){
+      const t = topList[i];
+      ctx.fillStyle = (i===myRank) ? '#5fff8f' : (t ? '#e8eaff' : '#3a3f63');
+      ctx.textAlign='left';  ctx.fillText(`${String(i+1).padStart(2,' ')}. ${t ? t.name : '------'}`, x0, y);
+      ctx.textAlign='right'; ctx.fillText(t ? String(t.score) : '0', x1, y);
+      y += 30;
+    }
+    ctx.textAlign='center'; ctx.fillStyle='#37e0ff'; ctx.font='bold 18px "Courier New"';
+    ctx.fillText('「↻ リセット」でもう一度', W/2, H-22);
+  }
+}
+
+// 照準スコープ：カメラの動き重心に出して、認識位置を可視化。最寄りの敵をロック。
+function drawScope(now){
+  if (!cameraOn || !focusActive) return;
+  let best=null, bd=1e9;
+  for (const e of enemies){ if (e.dead) continue; const d=(e.x-focusX)**2+(e.y-focusY)**2; if (d<bd){ bd=d; best=e; } }
+  focusId = best ? best.id : null;
+  ctx.save();
+  // 動き位置の十字（大きめ）
+  const r = 44 + Math.sin(now*0.008)*6;
+  ctx.strokeStyle='#37e0ff'; ctx.lineWidth=2; ctx.globalAlpha=0.85;
+  ctx.beginPath(); ctx.arc(focusX,focusY,r,0,7); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(focusX-r-10,focusY); ctx.lineTo(focusX-r+10,focusY);
+  ctx.moveTo(focusX+r-10,focusY); ctx.lineTo(focusX+r+10,focusY);
+  ctx.moveTo(focusX,focusY-r-10); ctx.lineTo(focusX,focusY-r+10);
+  ctx.moveTo(focusX,focusY+r-10); ctx.lineTo(focusX,focusY+r+10);
+  ctx.stroke();
+  if (best){                                   // 焦点：カメラAF風コーナー枠（大きめ）
+    const half = 46*(best.scale||1) + 16;
+    const len = 18, L=best.x-half, R=best.x+half, T=best.y-half, B=best.y+half;
+    ctx.strokeStyle='#ffd23f'; ctx.lineWidth=4; ctx.globalAlpha=1;
+    ctx.beginPath();
+    ctx.moveTo(L,T+len); ctx.lineTo(L,T); ctx.lineTo(L+len,T);
+    ctx.moveTo(R-len,T); ctx.lineTo(R,T); ctx.lineTo(R,T+len);
+    ctx.moveTo(L,B-len); ctx.lineTo(L,B); ctx.lineTo(L+len,B);
+    ctx.moveTo(R-len,B); ctx.lineTo(R,B); ctx.lineTo(R,B-len);
+    ctx.stroke();
+    ctx.fillStyle='#ffd23f'; ctx.font='bold 12px "Courier New"'; ctx.textAlign='center';
+    ctx.fillText('焦点', best.x, T-8);
+  }
+  ctx.restore();
+}
+function drawGrid(now){
+  ctx.strokeStyle = 'rgba(60,70,140,.18)'; ctx.lineWidth=1;
+  const t = now*0.00004;
+  for (let i=0;i<=12;i++){ const x=(i/12)*W; ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke(); }
+  for (let j=0;j<=8;j++){ const y=(j/8)*H; ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); }
+  // 星
+  ctx.fillStyle='rgba(120,140,255,.5)';
+  for (let i=0;i<40;i++){ const x=(i*97%W), y=((i*53+now*0.02)%H); ctx.fillRect(x,y,2,2); }
+}
+
+const hexA = (h,a)=>{ const n=parseInt(h.slice(1),16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; };
+function drawEnemy(e, now){
+  const dead = e.dead;
+  const sc = e.scale || 1;
+  const scale = (dead ? Math.max(0,e.deadAnim*2) : 1) * sc;
+  const spin = dead ? (1-e.deadAnim)*8 : 0;
+  const by0 = e.y + Math.sin(e.bob)*6;
+  // 属性色のグロー（敵の属性が一目で分かる）
+  if (!dead){
+    const gR = 50*sc, ec = ELEM_COLOR[e.element]||'#fff';
+    const g = ctx.createRadialGradient(e.x, by0, 6, e.x, by0, gR);
+    g.addColorStop(0, hexA(ec, 0.55)); g.addColorStop(1, hexA(ec, 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(e.x, by0, gR, 0, 7); ctx.fill();
+  }
+  ctx.save();
+  ctx.translate(e.x, by0);
+  ctx.rotate(spin);
+  ctx.scale(scale,scale);
+  // ヒットフラッシュ
+  if (now < e.hitUntil){ ctx.fillStyle='rgba(255,80,120,.5)'; ctx.beginPath(); ctx.arc(0,0,52,0,7); ctx.fill(); }
+  // スプライト（emoji）
+  ctx.font = '64px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(e.emoji, 0, 0);
+  ctx.restore();
+  if (dead) return;
+  const off = 40*sc;
+  // ★攻撃予兆（来るぞ！）: 赤いオーラ＋残り時間アーク＋警告
+  if (e.charging){
+    const tleft = Math.max(0, (e.chargeUntil - now) / WINDUP_MS);
+    const pulse = 0.5 + 0.5*Math.sin(now*0.02);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = `rgba(255,60,90,${0.45+0.45*pulse})`;
+    ctx.beginPath(); ctx.arc(e.x, e.y, off+8, 0, 7); ctx.stroke();
+    ctx.strokeStyle = '#ffd23f';                                  // 残り時間（減っていく）
+    ctx.beginPath(); ctx.arc(e.x, e.y, off+14, -Math.PI/2, -Math.PI/2 + tleft*Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#ff3a6e'; ctx.font='bold 15px "Courier New"'; ctx.textAlign='center';
+    ctx.fillText('！こうげき よけろ', e.x, e.y-off-36);
+  }
+  // 弱点ヒント（何を叫べばいいか）: 例「弱点⚡雷」
+  const weak = WEAKNESS[e.element];
+  if (weak){
+    ctx.fillStyle = ELEM_COLOR[weak]||'#fff';
+    ctx.font='bold 12px "Courier New"'; ctx.textAlign='center';
+    ctx.fillText(`弱点→${weak}`, e.x, e.y-off-20);
+  }
+  // 属性バッジ（色付きピルで一目で分かる）
+  const ec = ELEM_COLOR[e.element]||'#fff';
+  const pw=26, ph=18, px=e.x-pw/2, py=e.y-off-18;
+  ctx.fillStyle = ec; ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 5); ctx.fill();
+  ctx.fillStyle = '#0b0c1a'; ctx.font='bold 14px "Courier New"'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(e.element, e.x, py+ph/2+1);
+  ctx.textBaseline='alphabetic';
+  // 名前
+  ctx.fillStyle='#cfd6e6'; ctx.font='12px "Courier New"';
+  ctx.fillText(e.name, e.x, e.y+off+4);
+  // HPバー
+  const bw=64*sc, bh=7, bx=e.x-bw/2, by=e.y+off+10;
+  ctx.fillStyle='#000'; ctx.fillRect(bx-1,by-1,bw+2,bh+2);
+  ctx.fillStyle='#2a2d5e'; ctx.fillRect(bx,by,bw,bh);
+  const r = Math.max(0,e.hp/e.maxHp);
+  ctx.fillStyle = r>0.5?'#5fff8f':r>0.25?'#ffd23f':'#ff3a6e';
+  ctx.fillRect(bx,by,bw*r,bh);
+}
+
+function drawEffect(fx){
+  if (fx.type==='popup'){
+    ctx.globalAlpha = Math.max(0,fx.life);
+    ctx.fillStyle = fx.color; ctx.strokeStyle='#000'; ctx.lineWidth=4;
+    ctx.font = `bold ${fx.big?38:22}px "Courier New"`; ctx.textAlign='center';
+    ctx.strokeText(fx.text, fx.x, fx.y); ctx.fillText(fx.text, fx.x, fx.y);
+    ctx.globalAlpha=1;
+  } else if (fx.type==='ring'){
+    ctx.globalAlpha = Math.max(0,fx.life);
+    ctx.strokeStyle = fx.color; ctx.lineWidth=6;
+    ctx.beginPath(); ctx.arc(fx.x,fx.y,fx.r,0,7); ctx.stroke();
+    ctx.globalAlpha=1;
+  } else if (fx.type==='particle'){
+    ctx.globalAlpha = Math.max(0,fx.life);
+    ctx.fillStyle = fx.color;
+    const s = fx.size;
+    if (fx.shape==='streak'){ ctx.fillRect(fx.x, fx.y, s*4, s); }            // 風：横の筋
+    else if (fx.shape==='shard'){ ctx.beginPath(); ctx.moveTo(fx.x,fx.y-s); ctx.lineTo(fx.x+s,fx.y+s); ctx.lineTo(fx.x-s,fx.y+s); ctx.closePath(); ctx.fill(); } // 氷：かけら
+    else if (fx.shape==='star'){ ctx.font=`${s*3}px serif`; ctx.textAlign='center'; ctx.fillText('★', fx.x, fx.y); }
+    else if (fx.shape==='spark'){ ctx.fillRect(fx.x, fx.y, s, s*3); }        // 鋼：火花
+    else { ctx.fillRect(fx.x-s/2, fx.y-s/2, s, s); }                          // dot/rock
+    ctx.globalAlpha=1;
+  } else if (fx.type==='bolt'){
+    const a = Math.min(1, fx.life) * (0.55 + Math.random()*0.45);  // チラつき
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    const stroke=(pts, wGlow, wCore)=>{
+      ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.globalAlpha=a*0.45; ctx.strokeStyle=fx.color; ctx.lineWidth=wGlow; ctx.stroke();   // 外側グロー
+      ctx.globalAlpha=a;       ctx.strokeStyle='#ffffff'; ctx.lineWidth=wCore; ctx.stroke(); // 白コア
+    };
+    stroke(fx.pts, 12, 3.5);
+    for (const b of fx.branches) stroke(b, 5, 1.5);
+    ctx.globalAlpha=1;
+  }
+}
+requestAnimationFrame(loop);
+
+// ============================================================
+// 命中処理（遅いティア：STT→LLM の結果を反映）
+// ============================================================
+const esc = (s)=>(s||'').toString().replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// ============================================================
+// ことだまタイムライン（右）: 声→STT→AI判定の「いまここ！」を可視化
+//   listening(聞き取り中) → judging(AI判定中=いまここ) → done(結果)
+// ============================================================
+let kotodama = [];   // 新しい順
+let liveText = '';   // 認識途中(partial)の表示
+let judgeQueue = []; // AI判定の待ち行列
+function kotoCard(cls, status, word, r){
+  let res = '';
+  if (r){
+    const ec = ELEM_COLOR[r.element] || '#fff';
+    res = `<div class="kres"><span class="kelem" style="color:${ec}">${r.element||''} ${esc(r.spell_name||'')}${r.fallback?' ⚠':''}</span>`+
+          `<span class="kdmg">${r.dmg!=null?'-'+r.dmg:'—'}</span></div>`;
+  }
+  return `<div class="kcard ${cls}"><span class="kstat">${status}</span>`+
+         `<div class="kword">「${esc(word)}」</div>${res}</div>`;
+}
+function kotoRender(){
+  const cards = [];
+  if (liveText) cards.push(kotoCard('listening', '🎙 きいてる', liveText, null));
+  for (const e of kotodama){
+    if (e.status==='queued') cards.push(kotoCard('queued', '⏳ じゅんばん待ち', e.text, null));
+    else if (e.status==='judging') cards.push(kotoCard('judging', '▶ いまここ！ AI判定中…', e.text, null));
+    else cards.push(kotoCard('done', '✓ けっか', e.text, e.result || {}));
+  }
+  kotoList.innerHTML = cards.join('');
+}
+function kotoPush(e){ kotodama.unshift(e); if (kotodama.length>6) kotodama.length=6; kotoRender(); }
+
+function applyHit(result, loud, spellText, ki=0){
+  const target = enemies.find(e=>e.id===result.target_id && !e.dead)
+             || enemies.find(e=>!e.dead);
+  if (!target){ return; }
+  const crit = loud > 0.82;                          // 大声クリティカル
+  const volMult = 0.6 + Math.min(1.6, loud*2.2);     // 声の大きさ 0.6〜2.2倍
+  const kiMult = 1 + Math.min(0.6, ki*1.2);          // カメラの動き量で気合ブースト
+  const style = result.style ?? 50;
+  const styleMult = 1 + Math.min(0.9, Math.max(0, style-50)/55);  // カッコいい詠唱ほど威力UP(最大1.9倍)
+  const elemMult = matchup(result.element, target.element);
+  const critMult = crit ? 1.5 : 1;
+  const dmg = Math.round(result.power * volMult * elemMult * critMult * kiMult * styleMult);
+
+  target.hp -= dmg;
+  // ノックバック（声の大きさ＋風属性で吹っ飛び量UP）
+  const dir = target.x < W/2 ? -1 : 1;
+  const gust = result.element==='風' ? 1.8 : 1;
+  target.vx += dir * (160 + loud*420) * gust;
+  target.vy -= 60 + loud*180;
+  target.hitUntil = performance.now() + 220;
+
+  // ★ 言った属性の見た目（雷=稲妻 / 風=吹き飛ばし筋 / 火=炎 …）
+  elementBurst(target.x, target.y, result.element, Math.min(1.6, volMult*elemMult/1.8), dir);
+  const matchLabel = elemMult>1.4 ? '効果バツグン!' : elemMult<0.8 ? 'いまひとつ…' : 'ヒット';
+  const matchCol   = elemMult>1.4 ? '#ffd23f' : elemMult<0.8 ? '#8b8fc7' : '#e8eaff';
+  addPopup(target.x, target.y-20, '-'+dmg, elemMult>1.4?'#ffd23f':'#fff', elemMult>1.4 || crit);
+  shake = Math.min(40, 8 + loud*36 + (elemMult>1.4?10:0) + (crit?8:0));
+  flash = Math.min(.55, loud*0.5 + (crit?.2:0));
+  if (crit) addPopup(W/2, H*0.30, 'クリティカル！おおごえ!', '#ffd23f', true);
+
+  // ★ 何を言って何が効いたかを1枚で見せる
+  const ec = ELEM_COLOR[result.element] || '#fff';
+  showBanner(result.spell_name,
+    `🗣「${esc(spellText)}」<br>`+
+    `<span style="color:${ec}">${result.element}</span> → ${target.emoji}${target.element} `+
+    `<b style="color:${matchCol}">${matchLabel}</b><br>`+
+    `威力${result.power} ×声${volMult.toFixed(1)} ×相性${elemMult.toFixed(1)}`+
+    `${style>=58?' ×<b style="color:#ff5ad0">ｶｯｺﾖｻ'+styleMult.toFixed(1)+'</b>':''}`+
+    `${ki>0.05?' ×<b style="color:#ff8a3a">気合'+kiMult.toFixed(1)+'</b>':''}`+
+    `${crit?' ×<b style="color:#ffd23f">会心1.5</b>':''} = <b>${dmg}</b>`);
+  if (style>=85) addPopup(W/2, H*0.36, 'キマった！', '#ff5ad0', true);
+
+  if (target.hp <= 0){
+    target.dead = true; target.deadAnim = 0.5; target.hp=0;
+    target.charging = false; target.pendingAtk = null;   // 倒せば攻撃予兆も中断＝回避
+    combo++;
+    score += 100 + Math.round(loud*100) + combo*20;
+    $('score').textContent = 'SCORE ' + score;
+    addPopup(target.x, target.y-60, combo>=2?`GET! x${combo}コンボ`:'GET!', '#5fff8f', true);
+  }
+  // 読み上げ（任意・準備できていれば）
+  speak(result.narration);
+  return { spell_name: result.spell_name, element: result.element, dmg, fallback: result._fallback };
+}
+
+// ============================================================
+// 敵の攻撃（AIが生成したセリフでプレイヤーを殴る）
+// ============================================================
+// 攻撃予兆を開始（チャージ）。プレイヤーに「来るぞ」を見せる。
+function beginAttack(){
+  const ready = enemies.filter(e=>!e.dead && !e.charging);
+  if (!ready.length) return;
+  const e = ready[Math.floor(Math.random()*ready.length)];
+  e.charging = true; e.chargeUntil = performance.now() + WINDUP_MS;
+  e.pendingAtk = e.attack || cannedAttack(e);
+}
+// 予兆が満了 → 実際に着弾（ガード中ならブロック）
+function landAttack(e){
+  const atk = e.pendingAtk || e.attack || cannedAttack(e);
+  e.charging = false; e.pendingAtk = null;
+  e.vy += 240; e.hitUntil = performance.now() + 180;
+  if (performance.now() < guardUntil){              // ★ガード成功（声）
+    addRing(W/2, H*0.74, '#37e0ff'); addRing(W/2, H*0.74, '#fff'); flash = Math.max(flash,.3);
+    showBanner('🛡 ガード成功！', `<span style="color:#37e0ff">${e.name} の ${atk.attack_name} を ふせいだ！</span>`);
+    addPopup(W/2, H*0.70, 'BLOCK!', '#37e0ff', true);
+    speak('ガード せいこう！');
+    return;
+  }
+  // ★体を動かして回避：その攻撃者にフォーカスが合っているときだけ成功（よそ見NG）
+  if (cameraOn && motionLevel > 0.4 && focusId === e.id){
+    addRing(e.x, e.y, '#37e0ff'); flash = Math.max(flash,.18); shake = Math.max(shake,10);
+    showBanner('ヒラリ！回避', `<span style="color:#37e0ff">${e.name} の ${atk.attack_name} を かわした！</span>`);
+    addPopup(W/2, H*0.70, 'DODGE!', '#37e0ff', true);
+    return;
+  }
+  elementBurst(W/2, H*0.78, atk.element, 1, e.x<W/2?-1:1);
+  playerHP = Math.max(0, playerHP - atk.damage);
+  updateHP();
+  combo = 0;                               // 被弾でコンボ途切れ
+  hurt = 1; shake = Math.max(shake, 16);
+  showBanner(`${e.name} の ${atk.attack_name}`, `<span style="color:#ff8aa0">${atk.damage} ダメージを受けた！</span>`);
+  addPopup(W/2, H*0.70, '-'+atk.damage, '#ff8aa0', false);
+  speak(atk.narration);
+  if (playerHP <= 0) downAndRevive();
+}
+
+const DOWN_PENALTY = 500;
+function downAndRevive(){
+  if (down) return;
+  down = true; combo = 0;
+  score = Math.max(0, score - DOWN_PENALTY);          // ダウンで減点
+  $('score').textContent = 'SCORE ' + score;
+  addPopup(W/2, H*0.42, '-'+DOWN_PENALTY, '#ff3a6e', true);
+  updateHP();
+  showBanner('ダウン！', `<span style="color:#ff3a6e">スコア -${DOWN_PENALTY}！</span> たてなおせ…`);
+  setTimeout(()=>{
+    playerHP = playerMax; down = false; updateHP();
+    nextAttackIn = 4; flash = Math.max(flash, .4);
+    showBanner('ふっかつ！', 'さあ はんげき だ！');
+  }, 1500);
+}
+
+// ============================================================
+// マイク：音量(即時) + STT(WS)
+// ============================================================
+let audioCtx=null, workletNode=null, mediaStream=null, downsampler=null;
+let pendingChunks=[], pendingLength=0, ws=null, ready=false, recording=false;
+
+class Downsampler{
+  constructor(inR,outR){ this.ratio=inR/outR; this.pos=0; this.carry=new Float32Array(0); }
+  process(chunk){
+    const data=new Float32Array(this.carry.length+chunk.length);
+    data.set(this.carry); data.set(chunk,this.carry.length);
+    const out=[]; let pos=this.pos;
+    while(pos+1<data.length){ const i=Math.floor(pos),f=pos-i; out.push(data[i]*(1-f)+data[i+1]*f); pos+=this.ratio; }
+    const consumed=Math.floor(pos); this.carry=data.slice(consumed); this.pos=pos-consumed;
+    return Float32Array.from(out);
+  }
+}
+function f32ToI16(s){ const o=new Int16Array(s.length); for(let i=0;i<s.length;i++){const v=Math.max(-1,Math.min(1,s[i]));o[i]=Math.round(v*32767);} return o; }
+
+function connectWS(){
+  const proto = location.protocol==='https:'?'wss':'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = ()=> ws.send(JSON.stringify({type:'config',language:'ja'}));
+  ws.onmessage = (ev)=>{
+    const msg = JSON.parse(ev.data);
+    if (msg.type!=='ready') console.log('[STT]', msg.type, JSON.stringify(msg.text ?? ''));
+    if (msg.type==='ready'){ ready=true; micBtn.disabled=false; setStatus(`STT準備OK (${msg.model})`,'ok'); console.log('[STT] model =', msg.model);
+      if (pendingMic && !recording){ pendingMic=false; startMic().catch(()=>{}); } }
+    else if (msg.type==='partial'){ onPartial(msg.text); }
+    else if (msg.type==='final'){ onFinal(msg.text); }
+    else if (msg.type==='error'){ setStatus('STTエラー: '+msg.message,'err'); }
+  };
+  ws.onclose = ()=>{ ready=false; if(recording) stopMic(); setStatus('STT再接続中…','warn'); setTimeout(connectWS,2000); };
+}
+
+function flushAudio(){
+  if (pendingLength===0 || !ws || ws.readyState!==WebSocket.OPEN) return;
+  const merged=new Float32Array(pendingLength); let off=0;
+  for(const c of pendingChunks){ merged.set(c,off); off+=c.length; }
+  pendingChunks=[]; pendingLength=0;
+  ws.send(f32ToI16(merged).buffer);
+}
+
+// 音量による発話検出（STTテキストとは独立。マイクが聞こえてる事を即可視化）
+const VOICE_ON = 0.12, VOICE_OFF = 0.06;
+let speaking = false, lastKick = 0;
+function onLevel(chunk){
+  let sum=0; for(let i=0;i<chunk.length;i++) sum+=chunk[i]*chunk[i];
+  const rms=Math.sqrt(sum/chunk.length);
+  const loud=Math.min(1, rms*4);           // 0..1 に正規化（マイク次第で要調整）
+  powerFill.style.width = (loud*100).toFixed(0)+'%';
+  if (!recording) return;
+  // 発話のオン/オフをヒステリシスで判定 → 即時ティアの心臓
+  if (!speaking && loud > VOICE_ON){ speaking=true; casting=true; peakLoud=0; peakMotion=0;
+    if (!castLine.textContent.startsWith('✦')) { castLine.textContent='🎙 きこえてる…'; castLine.className=''; } }
+  else if (speaking && loud < VOICE_OFF){ speaking=false; }
+  if (speaking) peakLoud = Math.max(peakLoud, loud);
+  powerLabel.textContent = speaking ? '🎙 きこえてる！' : 'VOICE';
+  // 詠唱中に声がデカく跳ねたら画面を軽くキック
+  if (speaking && loud>0.7 && performance.now()-lastKick>120){
+    shake=Math.max(shake, 6+loud*8); lastKick=performance.now();
+  }
+}
+
+async function startMic(){
+  mediaStream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
+  audioCtx = new AudioContext();
+  await audioCtx.audioWorklet.addModule('/static/worklet.js');
+  downsampler = new Downsampler(audioCtx.sampleRate, TARGET_RATE);
+  pendingChunks=[]; pendingLength=0;
+  const src = audioCtx.createMediaStreamSource(mediaStream);
+  workletNode = new AudioWorkletNode(audioCtx,'pcm-capture');
+  workletNode.port.onmessage = (ev)=>{
+    onLevel(ev.data);
+    const rs = downsampler.process(ev.data);
+    if (rs.length===0) return;
+    pendingChunks.push(rs); pendingLength+=rs.length;
+    if (pendingLength>=SEND_CHUNK) flushAudio();
+  };
+  src.connect(workletNode);
+  ws.send(JSON.stringify({type:'config',language:'ja'}));
+  recording=true; started=true;
+  if (!sessionActive) beginSession();   // 初回マイクONでゲーム開始（3-2-1）
+  micBtn.classList.remove('off'); micBtn.textContent='🎤 マイクON'; setStatus('録音中：敵に呪文を叫べ！','recording');
+}
+function stopMic(){
+  recording=false;
+  if (workletNode){ workletNode.port.onmessage=null; workletNode.disconnect(); workletNode=null; }
+  if (mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); mediaStream=null; }
+  if (audioCtx){ audioCtx.close(); audioCtx=null; }
+  flushAudio();
+  if (ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'stop'}));
+  powerFill.style.width='0%'; powerLabel.textContent='VOICE'; speaking=false; casting=false;
+  micBtn.classList.add('off'); micBtn.textContent='🎤 マイクOFF'; if(ready) setStatus('待機中','ok');
+}
+micBtn.addEventListener('click', async ()=>{
+  if (recording){ stopMic(); return; }
+  micBtn.disabled=true;
+  try{ await startMic(); }catch(e){ setStatus('マイク取得失敗: '+e.message,'err'); }
+  finally{ micBtn.disabled=false; }
+});
+
+// ============================================================
+// STT イベント → 二段ティア
+// ============================================================
+let started=false;
+// whisper系STTが無音/雑音で吐く定番の幻聴。判定にも表示にも回さない。
+const NOISE_PHRASES = [
+  'ご視聴ありがとうございました','ご清聴ありがとうございました','ご視聴いただきありがとうございました',
+  'ご覧いただきありがとうございました','最後までご視聴','チャンネル登録','高評価',
+  'おやすみなさい','ありがとうございました',
+];
+function isNoise(t){ const s=(t||'').replace(/[\s。、！!？?]/g,''); return s!=='' && NOISE_PHRASES.some(p=>s.includes(p)); }
+// ガード詠唱（叫ぶと一定時間ブロック）
+const GUARD_WORDS = ['ガード','がーど','まもれ','まもる','守れ','守る','シールド','しーるど','ぼうぎょ','防御','たて','盾','バリア','ばりあ'];
+function isGuard(t){ const s=(t||'').replace(/[\s。、！!？?]/g,''); return GUARD_WORDS.some(p=>s.includes(p)); }
+function doGuard(text){
+  guardUntil = performance.now() + GUARD_MS;
+  flash = Math.max(flash, .25); addRing(W/2, H*0.74, '#37e0ff');
+  showBanner('🛡 ガード！', `<span style="color:#37e0ff">${(GUARD_MS/1000).toFixed(1)}秒 こうげきを ふせぐ</span>`);
+  const entry = { text, status:'done', result:{ element:'', spell_name:'🛡ガード', dmg:null } };
+  kotoPush(entry);
+  speak('ガード！');
+}
+// パルプンテ：何が起きるかランダムのお遊び呪文
+const PARUPUNTE = ['パルプンテ','ぱるぷんて','パルプン','ばるぷんて','パルプンデ'];
+function isParupunte(t){ const s=(t||'').replace(/[\s。、！!？?]/g,''); return PARUPUNTE.some(p=>s.includes(p)); }
+function parupunte(){
+  shake=Math.max(shake,30); flash=Math.max(flash,.6); tint=Math.max(tint,.5); tintColor='#ff5ad0';
+  const ELS=Object.keys(ELEM_COLOR);
+  for (let i=0;i<6;i++) elementBurst(rand(W*0.2,W*0.8), rand(H*0.2,H*0.6), ELS[(Math.random()*ELS.length)|0], 1.4, Math.random()<.5?-1:1);
+  let msg;
+  switch (Math.floor(Math.random()*7)){
+    case 0: for(const e of enemies){ if(!e.dead){ e.hp-=4000; if(e.hp<=0){ e.dead=true; e.deadAnim=.5; e.hp=0; e.charging=false; score+=120; } } }
+            $('score').textContent='SCORE '+score; msg='ぜんたいに だいダメージ！'; break;
+    case 1: playerHP=playerMax; updateHP(); msg='HP ぜんかいふく！'; break;
+    case 2: for(const e of enemies){ if(!e.dead){ e.charging=false; e.pendingAtk=null; e.vy-=400; e.vx+=(Math.random()-.5)*800; } } msg='てき ぜんいん ふっとんだ！'; break;
+    case 3: timeLeft=Math.min(GAME_SEC, timeLeft+15); msg='じかん +15びょう！'; break;
+    case 4: score+=2000; $('score').textContent='SCORE '+score; msg='スコア +2000！'; break;
+    case 5: msg='…なにも おこらなかった！'; break;
+    default: { const slots=shuffle([...ROWS.flatMap(r=>COLS.map(c=>({c,r})))]); const k=shuffle(ENEMY_KINDS.slice());
+              for(let i=0;i<2&&i<slots.length;i++){ const {c,r}=slots[i]; const ne=makeEnemy(k[i%k.length],c,r,1500+wave*600); ne.attack=cannedAttack(ne); enemies.push(ne); }
+              msg='てきが ふえた！？'; }
+  }
+  showBanner('✨パルプンテ✨', `<span style="color:#ff5ad0">${msg}</span>`);
+  speak('パルプンテ！ '+msg);
+}
+function onPartial(text){
+  if (!text || isNoise(text)) return;
+  if (!casting){ casting=true; peakLoud=0; peakMotion=0; }   // 発話開始＝詠唱開始
+  castLine.textContent = '🗣 ' + text;
+  castLine.className='';
+  liveText = text; kotoRender();               // 右パネルに途中経過
+}
+function onFinal(text){
+  casting=false;
+  liveText='';
+  if (!text || !text.trim() || isNoise(text)){ kotoRender(); return; }
+  const loud = peakLoud; peakLoud=0;
+  const ki = peakMotion; peakMotion=0;
+  castLine.textContent = '✦ ' + text;
+  castLine.className='final';
+  // 即時ティア：確定の瞬間に手応え（LLM待ちでも空白を作らない）
+  flash=Math.max(flash, 0.25+loud*0.25);
+  shake=Math.max(shake, 6+loud*10);
+  addRing(W/2, H*0.42, '#37e0ff');
+  // ガード詠唱・パルプンテは即時発動（LLM不要）。
+  if (isGuard(text)){ doGuard(text); return; }
+  if (isParupunte(text)){ kotoPush({ text, status:'done', result:{ element:'', spell_name:'✨パルプンテ', dmg:null } }); parupunte(); return; }
+  // 遅いティア：捨てずに待ち行列へ。たくさん叫んでも全部カードに出る。
+  const entry = { text, loud, ki, focusId, status:'queued', result:null };
+  kotoPush(entry);
+  judgeQueue.push(entry);
+  pumpJudge();
+}
+// 待ち行列を1件ずつ順番にAI判定（同時に2台へ投げると競合するので直列）
+async function pumpJudge(){
+  if (resolving) return;
+  const entry = judgeQueue.shift();
+  if (!entry) return;
+  resolving = true;
+  entry.status = 'judging'; kotoRender();
+  setStatus(`AI判定中…（待ち${judgeQueue.length}）`, 'warn');
+  try{
+    const result = await judgeSpell(entry.text, { enemies: enemies.filter(e=>!e.dead), loudness: entry.loud, focusId: entry.focusId });
+    const info = applyHit(result, entry.loud, entry.text, entry.ki);
+    entry.status='done'; entry.result = info || {}; kotoRender();
+    setStatus(result._fallback?'場つなぎ判定(LLM未応答)':'判定OK', result._fallback?'warn':'ok');
+  }catch(e){
+    entry.status='done'; entry.result={element:'',spell_name:'判定失敗',dmg:null,fallback:true}; kotoRender();
+    setStatus('判定失敗: '+(e.message||e),'err');
+  }finally{
+    resolving = false;
+    pumpJudge();   // 次の待ちを処理
+  }
+}
+
+// ナレーション表示（TTS無効でも常に画面に出す前提なので、ここは音声のみ）
+function tickerSay(t){ /* 演出テキスト用フック（必要なら拡張） */ }
+
+// ============================================================
+// TTS（任意・遅延ロード）
+// ============================================================
+let tts=null, ttsOn=false;
+const ttsStat = $('ttsStat');
+const ttsSay = (t)=>{ ttsStat.textContent = t ? 'TTS: '+t : ''; };  // 右リストの下に表示
+async function enableTTS(){
+  const { TTSSpeaker } = await import('/static/tts.mjs');
+  tts = new TTSSpeaker({ onStatus: ttsSay });
+  await tts.load();
+  const blob = await (await fetch('./ref-kyoko.wav')).blob();
+  await tts.setReference(blob);
+  ttsSay('読み上げ待機中');
+}
+function speak(text){ if (ttsOn && tts && tts.ready && text) tts.speak(text); }
+ttsBtn.addEventListener('click', async ()=>{
+  if (ttsOn){ ttsOn=false; ttsBtn.classList.add('off'); ttsBtn.textContent='🔊 読み上げOFF'; return; }
+  ttsBtn.disabled=true;
+  try{
+    if (!tts) await enableTTS();
+    ttsOn=true; ttsBtn.classList.remove('off'); ttsBtn.textContent='🔊 読み上げON';
+  }catch(e){ ttsSay('有効化失敗: '+(e.message||e)); ttsBtn.checked=false; }
+  finally{ ttsBtn.disabled=false; }
+});
+
+// ============================================================
+// BGM（チップチューン・アセット不要。ボス時は激しく）
+// ============================================================
+const N = (m)=>440*Math.pow(2,(m-69)/12);   // MIDI→Hz
+const LEAD = {
+  normal:[0,3,7,10,12,10,7,3, 0,3,7,12,15,12,10,7],
+  boss:  [0,1,7,8,12,8,7,1,   0,3,6,8,11,8,6,3],
+};
+const ROOT = { normal:57, boss:50 }, BPM = { normal:126, boss:158 };
+let bgm = null;
+function bgmVoice(freq, t, dur, type, vol){
+  const o=bgm.ctx.createOscillator(), g=bgm.ctx.createGain();
+  o.type=type; o.frequency.value=freq;
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0008,t+dur);
+  o.connect(g); g.connect(bgm.master); o.start(t); o.stop(t+dur+0.03);
+}
+function bgmSched(){
+  if (!bgm) return;
+  const ctx=bgm.ctx, mode=bgm.mode, stepDur=60/BPM[mode]/4;
+  while (bgm.next < ctx.currentTime + 0.12){
+    const s = bgm.step % 16, t = bgm.next;
+    bgmVoice(N(ROOT[mode]+LEAD[mode][s]+12), t, stepDur*0.9, 'square', 0.08);   // リード
+    if (s%4===0) bgmVoice(N(ROOT[mode]-12), t, stepDur*3.6, 'triangle', 0.16);  // ベース
+    if (s===0||s===8||(mode==='boss'&&s===12)) bgmVoice(60, t, 0.12, 'sine', 0.32); // キック
+    bgm.next += stepDur; bgm.step++;
+  }
+}
+function startBGM(){
+  if (bgm) return;
+  const ctx = new (window.AudioContext||window.webkitAudioContext)();
+  const master = ctx.createGain(); master.gain.value=0; master.connect(ctx.destination);
+  master.gain.linearRampToValueAtTime(0.14, ctx.currentTime+1.0);
+  bgm = { ctx, master, step:0, next:ctx.currentTime+0.1, mode:(enemies.some(e=>e.scale>1)?'boss':'normal'), timer:setInterval(bgmSched,25) };
+}
+function stopBGM(){
+  if (!bgm) return;
+  clearInterval(bgm.timer);
+  bgm.master.gain.linearRampToValueAtTime(0, bgm.ctx.currentTime+0.3);
+  const c=bgm.ctx; setTimeout(()=>c.close().catch(()=>{}),400); bgm=null;
+}
+function bgmSetMode(m){ if (bgm) bgm.mode = m; }
+bgmBtn.addEventListener('click', ()=>{
+  if (bgm){ stopBGM(); bgmBtn.classList.add('off'); bgmBtn.textContent='🎵 BGM OFF'; }
+  else { startBGM(); bgmBtn.classList.remove('off'); bgmBtn.textContent='🎵 BGM ON'; }
+});
+
+// ============================================================
+// 起動
+// ============================================================
+// 「タップしてスタート」: 1タップで4つ全部ON＋ゲーム開始（権限/自動再生をまとめて満たす）
+const startOverlay = $('startOverlay');
+let pendingMic = false;
+async function autoStartAll(){
+  startOverlay.classList.add('hidden');
+  if (!bgm){ try{ startBGM(); bgmBtn.classList.remove('off'); bgmBtn.textContent='🎵 BGM ON'; }catch(_){} }
+  if (ready && !recording){ try{ await startMic(); }catch(e){ setStatus('マイク失敗:'+(e.message||e),'err'); } }
+  else { pendingMic = true; }
+  if (!cameraOn){ try{ await startCamera(); camBtn.classList.remove('off'); camBtn.textContent='📷 カメラON'; }catch(_){} }
+  if (!tts){ try{ await enableTTS(); ttsOn=true; ttsBtn.classList.remove('off'); ttsBtn.textContent='🔊 読み上げON'; }catch(_){} }
+}
+startOverlay.addEventListener('click', autoStartAll);
+
+console.log('judge LLM:', JUDGE_ENDPOINT, '/ enemy LLM:', ENEMY_ENDPOINT);
+updateHP();
+hiEl.textContent = 'HI ' + hiScore;
+connectWS();
+</script>
+</body>
+</html>
