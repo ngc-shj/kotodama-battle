@@ -221,10 +221,13 @@ let playerHP = 1000, playerMax = 1000, down = false, nextAttackIn = 0, combo = 0
 // セッション（120秒・開始カウントダウン・得点記録）
 const GAME_SEC = 120, HI_KEY = 'spellbattle_hi', TOP_KEY = 'spellbattle_top';
 let timeLeft = GAME_SEC, countdown = 0, gameOver = false, sessionActive = false;
+// セッション世代。リセットで進め、前セッションの遅延コールバック（STT最終結果・AI判定）を無効化する。
+let sessionGen = 0, utteranceGen = 0;
 let hiScore = +(localStorage.getItem(HI_KEY) || 0);
 let topList = [], myRank = -1;
 function loadTop(){ try { return JSON.parse(localStorage.getItem(TOP_KEY)) || []; } catch { return []; } }
 function beginSession(){
+  sessionGen++; casting = false;                    // 前セッションの遅延コールバックを切り離す
   score = 0; combo = 0; wave = 0; enemies = []; effects = [];
   judgeQueue.length = 0; kotodama.length = 0; liveText = '';
   playerHP = playerMax; down = false; gameOver = false; sessionActive = true;
@@ -1130,14 +1133,17 @@ function parupunte(){
 }
 function onPartial(text){
   if (!text || isNoise(text)) return;
-  if (!casting){ casting=true; peakLoud=0; peakMotion=0; }   // 発話開始＝詠唱開始
+  if (!casting){ casting=true; utteranceGen=sessionGen; peakLoud=0; peakMotion=0; }   // 発話開始＝詠唱開始
+  if (utteranceGen !== sessionGen) return;      // リセット前に始まった発話の続き → 無視
   castLine.textContent = '🗣 ' + text;
   castLine.className='';
   liveText = text; kotoRender();               // 右パネルに途中経過
 }
 function onFinal(text){
+  const stale = utteranceGen !== sessionGen;    // リセットをまたいだ発話の最終結果は捨てる
   casting=false;
   liveText='';
+  if (stale){ kotoRender(); return; }
   if (!text || !text.trim() || isNoise(text)){ kotoRender(); return; }
   const loud = peakLoud; peakLoud=0;
   const ki = peakMotion; peakMotion=0;
@@ -1151,7 +1157,7 @@ function onFinal(text){
   if (isGuard(text)){ doGuard(text); return; }
   if (isParupunte(text)){ kotoPush({ text, status:'done', result:{ element:'', spell_name:'✨パルプンテ', dmg:null } }); parupunte(); return; }
   // 遅いティア：捨てずに待ち行列へ。たくさん叫んでも全部カードに出る。
-  const entry = { text, loud, ki, focusId, status:'queued', result:null };
+  const entry = { text, loud, ki, focusId, gen: sessionGen, status:'queued', result:null };
   kotoPush(entry);
   judgeQueue.push(entry);
   pumpJudge();
@@ -1162,14 +1168,17 @@ async function pumpJudge(){
   const entry = judgeQueue.shift();
   if (!entry) return;
   resolving = true;
+  const gen = entry.gen;
   entry.status = 'judging'; kotoRender();
   setStatus(`AI判定中…（待ち${judgeQueue.length}）`, 'warn');
   try{
     const result = await judgeSpell(entry.text, { enemies: enemies.filter(e=>!e.dead), loudness: entry.loud, focusId: entry.focusId });
+    if (gen !== sessionGen) return;            // リセット済み：結果も敵への作用も捨てる
     const info = applyHit(result, entry.loud, entry.text, entry.ki);
     entry.status='done'; entry.result = info || {}; kotoRender();
     setStatus(result._fallback?'場つなぎ判定(LLM未応答)':'判定OK', result._fallback?'warn':'ok');
   }catch(e){
+    if (gen !== sessionGen) return;
     entry.status='done'; entry.result={element:'',spell_name:'判定失敗',dmg:null,fallback:true}; kotoRender();
     setStatus('判定失敗: '+(e.message||e),'err');
   }finally{
