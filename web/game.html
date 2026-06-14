@@ -263,13 +263,35 @@ let cameraOn = false, motionLevel = 0, peakMotion = 0, camStream = null;
 const motCv = document.createElement('canvas'); motCv.width = 64; motCv.height = 48;
 const motCtx = motCv.getContext('2d', { willReadFrequently: true });
 let motPrev = null, motAcc = 0;
-// 動きの重心 → 照準(focus)。最寄りの敵にフォーカスし、曖昧な叫びを寄せる。
+// 顔の位置 → 照準(focus)。最寄りの敵にフォーカスし、曖昧な叫びを寄せる。
 let focusX = W/2, focusY = H/2, focusActive = false, focusId = null;
+// 顔検出(MediaPipe BlazeFace)。同梱WASM/モデルで動作し、失敗時は肌色重心にフォールバック。
+let faceDetector = null, faceDetectorReady = false, faceDetectorInit = false;
 
 async function startCamera(){
   camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 }, audio: false });
   vid.srcObject = camStream; await vid.play();
   cameraOn = true; motPrev = null;
+  initFaceDetector();   // 非同期で顔検出を準備（失敗してもゲームは肌色重心で続行）
+}
+// MediaPipe顔検出の遅延初期化。GPUデリゲートが使えなければCPUへ。すべて失敗ならフォールバック。
+async function initFaceDetector(){
+  if (faceDetectorInit) return;
+  faceDetectorInit = true;
+  try{
+    const { FaceDetector, FilesetResolver } = await import('./vendor/mediapipe/vision_bundle.mjs');
+    const fileset = await FilesetResolver.forVisionTasks('./vendor/mediapipe/wasm');
+    const opts = (delegate) => ({
+      baseOptions: { modelAssetPath: './vendor/mediapipe/blaze_face_short_range.tflite', delegate },
+      runningMode: 'VIDEO', minDetectionConfidence: 0.5,
+    });
+    try{ faceDetector = await FaceDetector.createFromOptions(fileset, opts('GPU')); }
+    catch(_){ faceDetector = await FaceDetector.createFromOptions(fileset, opts('CPU')); }
+    faceDetectorReady = true;
+  }catch(e){
+    console.warn('FaceDetector init failed; using skin-color fallback:', e);
+    faceDetector = null; faceDetectorReady = false; faceDetectorInit = false;  // 次回ON時に再試行
+  }
 }
 function stopCamera(){
   cameraOn = false;
@@ -293,7 +315,34 @@ function sampleMotion(){
     motionLevel = motionLevel*0.6 + raw*0.4;          // 平滑化（気合・パンチ用）
   }
   motPrev = cur;
-  // 顔/頭の位置 = 肌色の重心（上側を重めにして顔へ寄せる）。動きより顔に行く。
+  updateFocusFromFace(cur);   // 顔の位置 → 照準(focus)
+  kiFill.style.width = (motionLevel*100).toFixed(0)+'%';
+  if (casting) peakMotion = Math.max(peakMotion, motionLevel);
+  if (casting && motionLevel > 0.45 && performance.now()-lastKick > 140){
+    shake = Math.max(shake, 6 + motionLevel*10); lastKick = performance.now();
+  }
+  tryPunch(prevLevel);   // 動きスパイク=パンチ
+}
+// 顔検出が動いていれば顔の中心で照準を更新、未準備/失敗時のみ肌色重心へフォールバック。
+function updateFocusFromFace(motionPixels){
+  if (faceDetectorReady && faceDetector && vid.videoWidth){
+    try{
+      const det = faceDetector.detectForVideo(vid, performance.now()).detections?.[0];
+      if (det){
+        const bb = det.boundingBox;                       // 動画ピクセル座標
+        const cx = bb.originX + bb.width/2, cy = bb.originY + bb.height*0.45;  // 額やや上を狙う
+        const fx = W - (cx / vid.videoWidth) * W;          // 鏡像表示に合わせて左右反転
+        const fy = (cy / vid.videoHeight) * H;
+        focusX = focusX*0.7 + fx*0.3; focusY = focusY*0.7 + fy*0.3;   // 平滑
+        focusActive = true;
+      }
+      return;   // 顔が無いフレームは位置を保持（肌色には落とさない）
+    }catch(_){ /* 検出エラー時のみ肌色フォールバック */ }
+  }
+  updateFocusFromSkin(motionPixels);
+}
+// フォールバック：肌色ピクセルの重心（上側を重めにして顔へ寄せる）。
+function updateFocusFromSkin(cur){
   let skin = 0, fxs = 0, fys = 0;
   for (let i=0;i<cur.length;i+=4){
     const r=cur[i], g=cur[i+1], b=cur[i+2];
@@ -304,15 +353,9 @@ function sampleMotion(){
   }
   if (skin > 8){
     const fx = W - (fxs/skin/64)*W, fy = (fys/skin/48)*H;
-    focusX = focusX*0.75 + fx*0.25; focusY = focusY*0.75 + fy*0.25;  // 平滑
+    focusX = focusX*0.75 + fx*0.25; focusY = focusY*0.75 + fy*0.25;
     focusActive = true;
   }
-  kiFill.style.width = (motionLevel*100).toFixed(0)+'%';
-  if (casting) peakMotion = Math.max(peakMotion, motionLevel);
-  if (casting && motionLevel > 0.45 && performance.now()-lastKick > 140){
-    shake = Math.max(shake, 6 + motionLevel*10); lastKick = performance.now();
-  }
-  tryPunch(prevLevel);   // 動きスパイク=パンチ
 }
 function nearestToFocus(){
   let best=null, bd=1e9;
@@ -648,7 +691,7 @@ function draw(now, dt){
   }
 }
 
-// 照準スコープ：カメラの動き重心に出して、認識位置を可視化。最寄りの敵をロック。
+// 照準スコープ：検出した顔の位置に出して、認識位置を可視化。最寄りの敵をロック。
 function drawScope(now){
   if (!cameraOn || !focusActive) return;
   let best=null, bd=1e9;
